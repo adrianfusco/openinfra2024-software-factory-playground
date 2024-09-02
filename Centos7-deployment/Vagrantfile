@@ -1,0 +1,67 @@
+Vagrant.configure("2") do |config|
+	# Use a CentOS 7 box that supports libvirt
+	config.vm.box = "centos/7"
+	config.vm.box_url = "https://app.vagrantup.com/centos/boxes/7/versions/2004.01/providers/libvirt/unknown/vagrant.box"
+
+	config.vm.define "sftests.com"
+	config.vm.hostname = "sftests.com"
+
+	# Configure libvirt provider
+	config.vm.provider :libvirt do |libvirt|
+		libvirt.memory = 8192
+		libvirt.cpus = 6
+		libvirt.machine_virtual_size = 40
+	end
+
+	config.vm.provision "shell", inline: <<-SHELL
+# Update repository URLs to use download.cf.centos.org
+    sudo sed -i 's|^mirrorlist|#mirrorlist|g' /etc/yum.repos.d/CentOS-*
+    sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=https://download.cf.centos.org|g' /etc/yum.repos.d/CentOS-*    
+    # Install Software Factory and dependencies
+    sudo yum update -y
+    sudo yum install -y cloud-utils-growpart
+
+    # Resize the partition and filesystem according to libvirt.machine_virtual_size
+    sudo growpart /dev/vda 1
+    sudo resize2fs /dev/vda1
+
+    # Install Software Factory and dependencies
+    sudo yum install -y https://softwarefactory-project.io/repos/sf-release-3.8.rpm
+    sudo yum update -y
+    sudo yum install -y sf-config
+
+    # Replace repos added by the sf by vault.centos.org since it reached EOL
+    sudo sed -i '49,59d' /usr/share/sf-config/ansible/roles/sf-base/tasks/install.yml
+    sudo sed -i '49r /dev/stdin' /usr/share/sf-config/ansible/roles/sf-base/tasks/install.yml <<EOF
+- name: Ensure GPG key for CentOS SIG Cloud is installed
+  rpm_key:
+    state: present
+    key: https://www.centos.org/keys/RPM-GPG-KEY-CentOS-SIG-Cloud
+- name: Ensure GPG key for CentOS SCLo is installed
+  rpm_key:
+    state: present
+    key: https://www.centos.org/keys/RPM-GPG-KEY-CentOS-SIG-SCLo
+- name: Ensure CentOS-OpenStack-stein repository is configured correctly
+  yum_repository:
+    name: centos-openstack-stein
+    description: "CentOS-7 - OpenStack stein"
+    baseurl: "http://vault.centos.org/\\\$contentdir/\\\$releasever/cloud/\\\$basearch/openstack-stein/"
+    gpgcheck: 1
+    gpgkey: "file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-SIG-Cloud"
+    enabled: 1
+    state: present
+- name: Ensure CentOS-SCLo-rh repository is configured correctly
+  yum_repository:
+    name: centos-sclo-rh
+    description: "CentOS-7 - SCLo rh"
+    baseurl: "http://vault.centos.org/centos/7/sclo/\\\$basearch/rh/"
+    gpgcheck: 1
+    gpgkey: "file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-SIG-SCLo"
+    enabled: 1
+    state: present
+EOF
+
+    # Configure Software Factory :)
+    sudo sfconfig
+  SHELL
+end
